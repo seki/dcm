@@ -5,10 +5,9 @@ module DCM_CharSet
 
   class Context
     def initialize(dcm_00080005)
-      @charset_names = parse_charset(dcm_00080005)
-      ary = @charset_names.map {CharactorSet[_1]}
+      ary = parse_charset(dcm_00080005).map {CharactorSet[_1]}
 
-      if ary.size == 1 && ary.first[:elements].nil?
+      if ary.size == 1 && ary.first[:encoding]
         @wo_extensions = true
         @encoding = ary.first[:encoding]
       else
@@ -25,7 +24,6 @@ module DCM_CharSet
         @reg = Regexp.new(seg.join('|'), 0)
       end
     end
-    attr_reader :allow_encoding
 
     def parse_charset(charset)
       ary = charset ? charset.strip.split('\\').map {|x| x.strip.upcase} : []
@@ -58,7 +56,6 @@ module DCM_CharSet
 
       result = []
       scan(str).each do |seg|
-        pp element
         if seg[0] == "\e"
           e = @allow_encoding[seg]
           element[e.code_element] = e
@@ -98,7 +95,7 @@ module DCM_CharSet
     end
   end
 
-  module E_shift_GL_to_GR
+  module E_shift_to_GR
     def encode(str)
       str.each_byte.map {|x| x | 0x80}.pack('c*').force_encoding(@encoding)
     end
@@ -161,12 +158,10 @@ module DCM_CharSet
     # single-byte with extensions
     
     'ISO 2022 IR 6' =>{
-      :extension => true,
       :elements => [AsciiElement]
     },
 
     'ISO 2022 IR 100' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x41], 'ISO_8859_1')
@@ -174,7 +169,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 101' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x42], 'iso-8859-2')
@@ -182,7 +176,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 109' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x43], 'iso-8859-3')
@@ -190,7 +183,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 110' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x44], 'iso-8859-4')
@@ -198,7 +190,6 @@ module DCM_CharSet
     },
     
     'ISO 2022 IR 144' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x4C], 'iso-8859-5')
@@ -206,7 +197,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 127' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x47], 'iso-8859-6')
@@ -214,7 +204,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 126' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x46], 'iso-8859-7')
@@ -222,7 +211,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 138' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x48], 'iso-8859-8')
@@ -230,7 +218,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 148' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x4D], 'iso-8859-9')
@@ -239,7 +226,6 @@ module DCM_CharSet
 
     # Japanese
     'ISO 2022 IR 13' => {
-      :extension => true,
       :elements => [
         Element.new('GL', [0x1B, 0x28, 0x4A], 'cp50221'),
         Element.new('GR', [0x1B, 0x29, 0x49], 'cp50221')
@@ -247,7 +233,6 @@ module DCM_CharSet
     },
 
     'ISO 2022 IR 166' => {
-      :extension => true,
       :elements => [
         AsciiElement, 
         Element.new('GR', [0x1B, 0x2D, 0x54], 'tis-620')
@@ -257,32 +242,24 @@ module DCM_CharSet
     # Multi-byte with extensions 
 
     'ISO 2022 IR 87' => {
-      :extension => true,
-      :multi_byte => true,
       :elements => [
-        Element.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_GL_to_GR)
+        Element.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
       ]
     },
 
     'ISO 2022 IR 159' => {
-      :extension => true,
-      :multi_byte => true,
       :elements => [
-        Element.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_GL_to_GR)
+        Element.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
       ]
     },
 
     'ISO 2022 IR 149' => {
-      :extension => true,
-      :multi_byte => true,
       :elements => [
         Element.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
       ]
     },
 
     'ISO 2022 IR 58' => {
-      :extension => true,
-      :multi_byte => true,
       :elements => [
         Element.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
       ]
@@ -291,17 +268,14 @@ module DCM_CharSet
     # Multi-byte without extensions
     'ISO_IR 192' => { 
       :encoding =>'utf-8',
-      :multi_byte => true
     },
 
     'GB18030' => {
       :encoding => 'GB18030',
-      :multi_byte => true 
     },
 
     'GBK' => { 
       :encoding => 'gbk',
-      :multi_byte => true 
     }
   }
 
