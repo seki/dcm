@@ -5,17 +5,17 @@ module DCM_CharSet
 
   class Context
     def initialize(dcm_00080005)
-      ary = parse_charset(dcm_00080005).map {CharactorSet[_1]}
+      ary = parse_charset(dcm_00080005)
 
-      if ary.size == 1 && ary.first[:encoding]
+      if ary.size == 1
         @wo_extensions = true
-        @encoding = ary.first[:encoding]
+        @encoding = CharactorSetWOExtensions[ary.first]
       else
-        @default_encoding = ary.first
+        @default_encoding = CharactorSet[ary.first]
         @wo_extensions = false
         @allow_encoding = {}
         ary.each do |x|
-          x[:elements].each do |y|
+          CharactorSet[x].each do |y|
             @allow_encoding[y.escape_sequence] = y
           end
         end
@@ -28,6 +28,10 @@ module DCM_CharSet
     def parse_charset(charset)
       ary = charset ? charset.strip.split('\\').map {|x| x.strip.upcase} : []
       return ['ISO_IR 6'] if ary.empty?
+      if ary.size == 1
+        raise(InvalidCharSet.new(ary.first)) unless CharactorSetWOExtensions.include?(ary.first)
+        return ary
+      end
       ary[0] = 'ISO 2022 IR 6' if ary[0].empty?
   
       ary.each do |x|
@@ -50,7 +54,7 @@ module DCM_CharSet
       return convert_wo_extensions(str) if without_extensions?
 
       element = {}
-      @default_encoding[:elements].each do |x|
+      @default_encoding.each do |x|
         element[x.code_element] = x
       end
 
@@ -103,182 +107,98 @@ module DCM_CharSet
 
   AsciiElement = Element.new('GL', [0x1B, 0x28, 0x42], 'ascii')
 
-  CharactorSet = {
-    # single-byte w/o extensions
-    "ISO_IR 6" => {
-      :encoding => 'ascii'
-    },
-
-    'ISO_IR 100' => {
-      :encoding => 'windows-1252'
-    },
-
-    'ISO_IR 101' => {
-      :encoding => 'iso-8859-2'
-    },
-
-    'ISO_IR 109' => {
-      :encoding =>'iso-8859-3'
-    },
-
-    'ISO_IR 110' => {
-      :encoding => 'iso-8859-4'
-    },
-
-    'ISO_IR 144' => {
-      :encoding => 'iso-8859-5'
-    },
-
-    'ISO_IR 127' => {
-      :encoding => 'iso-8859-6' 
-    },
-
-    'ISO_IR 126' => {
-      :encoding => 'iso-8859-7'
-    },
-
-    'ISO_IR 138' => {
-      :encoding => 'iso-8859-8'
-    },
-
-    # Latin alphabet No. 5
-    'ISO_IR 148' => {
-      :encoding => 'windows-1254' # FIXME
-    },
-
-    # FIXME
-    'ISO_IR 13' => {
-      :encoding => 'shift-jis' #FIXME
-    },
-
-    'ISO_IR 166' => {
-      :encoding => 'tis-620'
-    },
-
-    # single-byte with extensions
-    
-    'ISO 2022 IR 6' =>{
-      :elements => [AsciiElement]
-    },
-
-    'ISO 2022 IR 100' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x41], 'ISO_8859_1')
-      ]
-    },
-
-    'ISO 2022 IR 101' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x42], 'iso-8859-2')
-      ]
-    },
-
-    'ISO 2022 IR 109' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x43], 'iso-8859-3')
-      ]
-    },
-
-    'ISO 2022 IR 110' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x44], 'iso-8859-4')
-      ]
-    },
-    
-    'ISO 2022 IR 144' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x4C], 'iso-8859-5')
-      ]
-    },
-
-    'ISO 2022 IR 127' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x47], 'iso-8859-6')
-      ]
-    },
-
-    'ISO 2022 IR 126' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x46], 'iso-8859-7')
-      ]
-    },
-
-    'ISO 2022 IR 138' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x48], 'iso-8859-8')
-      ]
-    },
-
-    'ISO 2022 IR 148' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x4D], 'iso-8859-9')
-      ]
-    },
-
-    # Japanese
-    'ISO 2022 IR 13' => {
-      :elements => [
-        Element.new('GL', [0x1B, 0x28, 0x4A], 'cp50221'),
-        Element.new('GR', [0x1B, 0x29, 0x49], 'cp50221')
-      ]
-    },
-
-    'ISO 2022 IR 166' => {
-      :elements => [
-        AsciiElement, 
-        Element.new('GR', [0x1B, 0x2D, 0x54], 'tis-620')
-      ]
-    },
-
-    # Multi-byte with extensions 
-
-    'ISO 2022 IR 87' => {
-      :elements => [
-        Element.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
-      ]
-    },
-
-    'ISO 2022 IR 159' => {
-      :elements => [
-        Element.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
-      ]
-    },
-
-    'ISO 2022 IR 149' => {
-      :elements => [
-        Element.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
-      ]
-    },
-
-    'ISO 2022 IR 58' => {
-      :elements => [
-        Element.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
-      ]
-    },
-
-    # Multi-byte without extensions
-    'ISO_IR 192' => { 
-      :encoding =>'utf-8',
-    },
-
-    'GB18030' => {
-      :encoding => 'GB18030',
-    },
-
-    'GBK' => { 
-      :encoding => 'gbk',
-    }
+  CharactorSetWOExtensions = {
+    'ISO_IR 6' => 'ascii',
+    'ISO_IR 100' => 'windows-1252',
+    'ISO_IR 101' => 'iso-8859-2',
+    'ISO_IR 109' => 'iso-8859-3',
+    'ISO_IR 110' => 'iso-8859-4',
+    'ISO_IR 144' => 'iso-8859-5',
+    'ISO_IR 127' => 'iso-8859-6',
+    'ISO_IR 126' => 'iso-8859-7',
+    'ISO_IR 138' => 'iso-8859-8',
+    'ISO_IR 148' => 'windows-1254', # FIXME
+    'ISO_IR 13' => 'shift-jis', #FIXME
+    'ISO_IR 166' => 'tis-620',
+    'ISO_IR 192' => 'utf-8',
+    'GB18030' => 'GB18030',
+    'GBK' => 'gbk'
   }
 
+  CharactorSet = {
+    'ISO 2022 IR 6' => [AsciiElement],
+
+    'ISO 2022 IR 100' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x41], 'ISO_8859_1')
+    ],
+
+    'ISO 2022 IR 101' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x42], 'iso-8859-2')
+    ],
+
+    'ISO 2022 IR 109' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x43], 'iso-8859-3')
+    ],
+  
+    'ISO 2022 IR 110' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x44], 'iso-8859-4')
+    ],
+    
+    'ISO 2022 IR 144' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x4C], 'iso-8859-5')
+    ],
+
+    'ISO 2022 IR 127' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x47], 'iso-8859-6')
+    ],
+
+    'ISO 2022 IR 126' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x46], 'iso-8859-7')
+    ],
+
+    'ISO 2022 IR 138' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x48], 'iso-8859-8')
+    ],
+
+    'ISO 2022 IR 148' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x4D], 'iso-8859-9')
+    ],
+    
+    'ISO 2022 IR 13' => [
+      Element.new('GL', [0x1B, 0x28, 0x4A], 'cp50221'),
+      Element.new('GR', [0x1B, 0x29, 0x49], 'cp50221')
+    ],
+
+    'ISO 2022 IR 166' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x54], 'tis-620')
+    ],
+
+    'ISO 2022 IR 87' => [
+      Element.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
+    ],
+
+    'ISO 2022 IR 159' => [
+      Element.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
+    ],
+
+    'ISO 2022 IR 149' => [
+      Element.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
+    ],
+
+    'ISO 2022 IR 58' => [
+      Element.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
+    ]
+  }
 end
 
 if __FILE__ == $0
