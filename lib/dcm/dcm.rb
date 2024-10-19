@@ -18,25 +18,34 @@ module DCM
       def read_i4; read(4).unpack('N').first end
     end
 
-    def initialize(buf, transfer_syntax=nil)
+    def initialize(buf)
       @data = buf
       @cur = 0
-      @transfer_syntax = transfer_syntax
-      @in_file_meta = transfer_syntax ? false : true
-      if transfer_syntax
-        self.extend(ImplicitLittle) if @transfer_syntax == '1.2.840.10008.1.2'
-        self.extend(ExplicitBig) if @transfer_syntax == '1.2.840.10008.1.2.2'
-      else
-        raise 'not dicom file' if !dicm?
-      end
+      raise 'not dicom file' if !dicm?
+      @in_file_meta = true
+    end
+
+    def dicm?
+      forward(128)
+      read(4) == 'DICM'
+    end
+
+    def re_init(buf)
+      @data = buf
+      @cur = 0
+      self
     end
 
     def forward(n)
       @cur += n
     end
 
-    def read(n)
+    def peek(n)
       @data[@cur, n]
+    end
+
+    def read(n)
+      peek(n)
     ensure
       forward(n)
     end
@@ -68,12 +77,16 @@ module DCM
 
     def in_file_meta?(root)
       if @in_file_meta
-        group = @data[@cur, 2].unpack('v').first rescue return
+        group = peek(2).unpack('v').first rescue return
         if group != 2
           @in_file_meta = false
-          @transfer_syntax = root.dig("00020010", :value).to_s.strip
-          self.extend(ImplicitLittle) if @transfer_syntax == '1.2.840.10008.1.2'
-          self.extend(ExplicitBig) if @transfer_syntax == '1.2.840.10008.1.2.2'
+          transfer_syntax = root.dig("00020010", :value).to_s.strip
+          case transfer_syntax
+          when '1.2.840.10008.1.2'
+            self.extend(ImplicitLittle)
+          when '1.2.840.10008.1.2.2'
+            self.extend(ExplicitBig)
+          end
         end
       end
     end
@@ -90,7 +103,7 @@ module DCM
           stack.last << node
           stack.push(node)
         else
-          node = self.class.new(read(len), @transfer_syntax || true).parse({})
+          node = self.clone.re_init(read(len)).parse
           stack.last << node
         end
       when [0xfffe, 0xe00d]
@@ -118,7 +131,7 @@ module DCM
           stack.last[tag] = {:vr => vr, :value => ary}
           stack.push(ary)
         elsif vr == 'SQ'
-          ary = self.class.new(read(len), @transfer_syntax || true).parse_sq
+          ary = self.clone.re_init(read(len)).parse_sq
           stack.last[tag] = {:vr => vr, :value => ary}
         else
           stack.last[tag] = {:vr => vr, :value => read(len)}
@@ -127,10 +140,6 @@ module DCM
       tag
     end
 
-    def dicm?
-      forward(128)
-      read(4) == 'DICM'
-    end
   end
 end
 
