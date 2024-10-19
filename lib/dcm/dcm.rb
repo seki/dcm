@@ -11,13 +11,21 @@ module DCM
       def read_i4; read(4).unpack('V').first end
     end
 
+    module ExplicitBig
+      def read_tag; read(4).unpack('nn') end
+      def read_vr; read(2).unpack('a2').first end
+      def read_i2; read(2).unpack('n').first end
+      def read_i4; read(4).unpack('N').first end
+    end
+
     def initialize(buf, transfer_syntax=nil)
       @data = buf
       @cur = 0
       @transfer_syntax = transfer_syntax
-      @in_file_meta = transfer_syntax ? true : false
+      @in_file_meta = transfer_syntax ? false : true
       if transfer_syntax
         self.extend(ImplicitLittle) if @transfer_syntax == '1.2.840.10008.1.2'
+        self.extend(ExplicitBig) if @transfer_syntax == '1.2.840.10008.1.2.2'
       else
         raise 'not dicom file' if !dicm?
       end
@@ -41,9 +49,9 @@ module DCM
     def parse(root={})
       stack = []
       stack.push(root)
-      is_in_file_meta?(root)
+      in_file_meta?(root)
       while it = (visit_attr(stack) rescue nil)
-        is_in_file_meta?(root)
+        in_file_meta?(root)
         break if @data.size <= @cur
       end
       root
@@ -58,13 +66,14 @@ module DCM
       items
     end
 
-    def is_in_file_meta?(root)
+    def in_file_meta?(root)
       if @in_file_meta
         group = @data[@cur, 2].unpack('v').first rescue return
         if group != 2
           @in_file_meta = false
           @transfer_syntax = root.dig("00020010", :value).to_s.strip
           self.extend(ImplicitLittle) if @transfer_syntax == '1.2.840.10008.1.2'
+          self.extend(ExplicitBig) if @transfer_syntax == '1.2.840.10008.1.2.2'
         end
       end
     end
@@ -126,11 +135,9 @@ module DCM
 end
 
 if __FILE__ == $0
-  require 'find'
-
-  dcm = DCM::Reader.new(File.binread(ARGV.shift))
-  tree = dcm.parse
-
-  pp tree
-
+  while fname = ARGV.shift
+    dcm = DCM::Reader.new(File.binread(fname))
+    tree = dcm.parse
+    pp tree
+  end
 end
