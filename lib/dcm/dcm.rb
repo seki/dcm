@@ -21,7 +21,9 @@ module DCM
     def initialize(buf)
       @data = buf
       @cur = 0
-      raise 'not dicom file' if !dicm?
+      raise 'not dicom file' unless dicm?
+      @tail_of_meta = tail_of_meta
+      raise 'Not found: (0002,0000)' unless @tail_of_meta
       @in_file_meta = true
     end
 
@@ -30,9 +32,17 @@ module DCM
       read(4) == 'DICM'
     end
 
+    def tail_of_meta
+      return nil unless read_tag == [0x0002, 0x0000]
+      return nil unless read_vr == 'UL'
+      return nil unless read_i2 == 4
+      read_i4 + @cur
+    end
+
     def re_init(buf)
       @data = buf
       @cur = 0
+      @tail_of_meta = nil
       self
     end
 
@@ -40,12 +50,8 @@ module DCM
       @cur += n
     end
 
-    def peek(n)
-      @data[@cur, n]
-    end
-
     def read(n)
-      peek(n)
+      @data[@cur, n]
     ensure
       forward(n)
     end
@@ -58,9 +64,9 @@ module DCM
     def parse(root={})
       stack = []
       stack.push(root)
-      in_file_meta?(root)
+      in_file_meta(root)
       while it = (visit_attr(stack) rescue nil)
-        in_file_meta?(root)
+        in_file_meta(root)
         break if @data.size <= @cur
       end
       root
@@ -75,20 +81,23 @@ module DCM
       items
     end
 
-    def in_file_meta?(root)
-      if @in_file_meta
-        group = peek(2).unpack('v').first rescue return
-        if group != 2
-          @in_file_meta = false
-          transfer_syntax = root.dig("00020010", :value).to_s.strip
-          case transfer_syntax
-          when '1.2.840.10008.1.2'
-            self.extend(ImplicitLittle)
-          when '1.2.840.10008.1.2.2'
-            self.extend(ExplicitBig)
-          end
-        end
+    def prepare_transfer_syntax(transfer_syntax)
+      pp transfer_syntax
+      case transfer_syntax
+      when '1.2.840.10008.1.2'
+        self.extend(ImplicitLittle)
+      when '1.2.840.10008.1.2.2'
+        self.extend(ExplicitBig)
       end
+    end
+
+    def in_file_meta(root)
+      return unless @in_file_meta
+      return unless @tail_of_meta
+      return unless @tail_of_meta <= @cur
+
+      @in_file_meta = false
+      prepare_transfer_syntax(root.dig("00020010", :value).to_s.strip)
     end
 
     def visit_attr(stack)
