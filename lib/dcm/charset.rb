@@ -33,25 +33,20 @@ module DCM_CharSet
         return ary
       end
       ary[0] = 'ISO 2022 IR 6' if ary[0].empty?
-  
       ary.each do |x|
         raise(InvalidCharSet.new(x)) unless CharactorSet.include?(x)
       end
-  
+
       ary
     end
 
-    def without_extensions?
-      @wo_extensions
-    end
-
     def scan(str)
-      return [str] if without_extensions?
+      return [str] if @wo_extensions
       str.scan(@reg)
     end
 
     def convert(str)
-      return convert_wo_extensions(str) if without_extensions?
+      return convert_wo_extensions(str) if @wo_extensions
 
       element = {}
       @default_encoding.each do |x|
@@ -90,8 +85,15 @@ module DCM_CharSet
     end
     attr_reader :escape_sequence, :encoding, :code_element
 
+    def _encode(str)
+      str.dup.force_encoding(@encoding)
+    end
+
     def encode(str)
-      str.force_encoding(@encoding)
+      s = _encode(str)
+      s.instance_variable_set(:@dicom_encoding_element, self)
+      s.freeze
+      s
     end
 
     def inspect
@@ -100,8 +102,8 @@ module DCM_CharSet
   end
 
   module E_shift_to_GR
-    def encode(str)
-      str.each_byte.map {|x| x | 0x80}.pack('c*').force_encoding(@encoding)
+    def _encode(str)
+      str.each_byte.map {|x| x > 0x20 ? x | 0x80 : x}.pack('c*').force_encoding(@encoding)
     end
   end
 
@@ -118,6 +120,7 @@ module DCM_CharSet
     'ISO_IR 126' => 'iso-8859-7',
     'ISO_IR 138' => 'iso-8859-8',
     'ISO_IR 148' => 'windows-1254', # FIXME
+    'ISO_IR 203' => 'iso-8859-15',
     'ISO_IR 13' => 'shift-jis', #FIXME
     'ISO_IR 166' => 'tis-620',
     'ISO_IR 192' => 'utf-8',
@@ -172,6 +175,11 @@ module DCM_CharSet
       AsciiElement, 
       Element.new('GR', [0x1B, 0x2D, 0x4D], 'iso-8859-9')
     ],
+
+    'ISO 2022 IR 203' => [
+      AsciiElement, 
+      Element.new('GR', [0x1B, 0x2D, 0x62], 'iso-8859-15')
+    ],
     
     'ISO 2022 IR 13' => [
       Element.new('GL', [0x1B, 0x28, 0x4A], 'cp50221'),
@@ -204,21 +212,11 @@ end
 if __FILE__ == $0
 
   def do_it(dcm_00080005, str)
-    pp DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| x.encode('utf-8')}
+    puts str.unpack('C*').map {|x| "%02x" % x }.join(" ")
+    pp DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| [x.instance_variable_get(:@dicom_encoding_element), x.encode('utf-8')]}
   end
 
   c = DCM_CharSet::Context.new("\\ISO 2022 IR 87\\ISO 2022 IR 13")
-
-  data = [
-    "\e$BB@EDAm9gIB1!\e(B",
-    "SEKI^TOSHIKAZU=\e$B4X!!=SOB\e(B=\e)I\xBE\xB7\e(B^\e)I\xC4\xBC\xB6\xBD\xDE\e(B",
-    "=\e$BCf_7!!Ju\e(B ",
-    "\e$B<*I!0v9\"2J\e(B", 
-    "\e$BF,ItD04o\e(B(\e$B;XDj$J$7\e(B)\e$BC1=c\e(B",
-    "\e$BB@EDAm9gIB1!\e(B",
-    "\e$BFb<*\e(B",
-  ]
-  data.each {|s| pp c.convert(s).map {|x| x.encode('utf-8')}}
 
   do_it("\\ISO 2022 IR 87", "Yamada^Tarou=\033$B;3ED\033(B^\033$BB@O:\033(B=\033$B$d$^$@\033(B^\033$B$?$m$&\033(B")
   do_it("ISO 2022 IR 13\\ISO 2022 IR 87", "\324\317\300\336^\300\333\263=\033$B;3ED\033(J^\033$BB@O:\033(J=\033$B$d$^$@\033(J^\033$B$?$m$&\033(J")
@@ -226,4 +224,11 @@ if __FILE__ == $0
   do_it("ISO_IR 192", "\x57\x61\x6e\x67\x5e\x58\x69\x61\x6f\x44\x6f\x6e\x67\x3d\xe7\x8e\x8b\x5e\xe5\xb0\x8f\xe6\x9d\xb1\x3d")
   do_it("GB18030", "\x57\x61\x6e\x67\x5e\x58\x69\x61\x6f\x44\x6f\x6e\x67\x3d\xcd\xf5\x5e\xd0\xa1\xb6\xab\x3d")
   do_it("\\ISO 2022 IR 58", "\x5A\x68\x61\x6E\x67\x5E\x58\x69\x61\x6F\x44\x6F\x6E\x67\x3D\x1B\x24\x29\x41\xD5\xC5\x5E\x1B\x24\x29\x41\xD0\xA1\xB6\xAB\x3D\x20")
+
+  do_it("\\ISO 2022 IR 87\\ISO 2022 IR 13", "\e$B<*I!0v9\"2J\e(B")
+
+
+  do_it("ISO 2022 IR 13\\ISO 2022 IR 87\\ISO 2022 IR 6\\ISO 2022 IR 58\\ISO 2022 IR 149",
+  "\324\317\300\336^\300\333\263=\033$B;3ED\033(J^\033$BB@O:\033(J=\033$B$d$^$@\033(J^\033$B$?$m$&\033(J\n" + "\x5A\x68\x61\x6E\x67\x5E\x58\x69\x61\x6F\x44\x6F\x6E\x67\x3D\x1B\x24\x29\x41\xD5\xC5\x5E\x1B\x24\x29\x41\xD0\xA1\xB6\xAB\x3D\x20" + "Hong^Gildong=\033$)C\373\363^\033$)C\321\316\324\327=\033$)C\310\253^\033$)C\261\346\265\277"
+  )
 end
