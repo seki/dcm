@@ -12,6 +12,7 @@ module DCM_CharSet
         @encoding = CharactorSetWOExtensions[ary.first]
       else
         @default_encoding = CharactorSet[ary.first]
+        @default_encoding.each {|e| raise InvalidCharSet unless e.allow_default?}
         @wo_extensions = false
         @allow_encoding = {}
         ary.each do |x|
@@ -19,7 +20,7 @@ module DCM_CharSet
             @allow_encoding[y.escape_sequence] = y
           end
         end
-        seg = @allow_encoding.keys.map{Regexp.escape(_1)} + ['[\000-\032\034-\177]+', '[\200-\377]+']
+        seg = @allow_encoding.keys.map{Regexp.escape(_1)} + ['[\000-\037]+', '[\200-\237]+', '[\040-\177]+', '[\200-\377]+']
         
         @reg = Regexp.new(seg.join('|'), 0)
       end
@@ -36,34 +37,26 @@ module DCM_CharSet
       ary.each do |x|
         raise(InvalidCharSet.new(x)) unless CharactorSet.include?(x)
       end
-
       ary
-    end
-
-    def scan(str)
-      return [str] if @wo_extensions
-      str.scan(@reg)
     end
 
     def convert(str)
       return convert_wo_extensions(str) if @wo_extensions
 
-      element = {}
-      @default_encoding.each do |x|
-        element[x.code_element] = x
-      end
+      graphic = @default_encoding.map {|e| [e.code_element, e]}.to_h
 
       result = []
-      scan(str).each do |seg|
-        if seg[0] == "\e"
+      str.scan(@reg).each do |seg|
+        case seg.bytes.first
+        when 033
           e = @allow_encoding[seg]
-          element[e.code_element] = e
-        elsif seg.bytes.first < 0x80
-          e = element['GL']
-          result << e.encode(seg)
+          graphic[e.code_element] = e
+        when 0..037, 0200..0237 # CL, CR
+          result << seg
+        when 040..0177
+          result << graphic['GL'].encode(seg)
         else
-          e = element['GR']
-          result << e.encode(seg)
+          result << graphic['GR'].encode(seg)
         end
       end
 
@@ -99,6 +92,16 @@ module DCM_CharSet
     def inspect
       "#<#{self.class.to_s}:#{@escape_sequence.inspect} #{@encoding}>"
     end
+
+    def allow_default?
+      true
+    end
+  end
+
+  class MultibyteElement < Element
+    def allow_default?
+      false
+    end
   end
 
   module E_shift_to_GR
@@ -106,8 +109,6 @@ module DCM_CharSet
       str.each_byte.map {|x| x > 0x20 ? x | 0x80 : x}.pack('c*').force_encoding(@encoding)
     end
   end
-
-  AsciiElement = Element.new('GL', [0x1B, 0x28, 0x42], 'ascii')
 
   CharactorSetWOExtensions = {
     'ISO_IR 6' => 'ascii',
@@ -127,6 +128,8 @@ module DCM_CharSet
     'GB18030' => 'GB18030',
     'GBK' => 'gbk'
   }
+
+  AsciiElement = Element.new('GL', [0x1B, 0x28, 0x42], 'ascii')
 
   CharactorSet = {
     'ISO 2022 IR 6' => [AsciiElement],
@@ -192,19 +195,19 @@ module DCM_CharSet
     ],
 
     'ISO 2022 IR 87' => [
-      Element.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
+      MultibyteElement.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
     ],
 
     'ISO 2022 IR 159' => [
-      Element.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
+      MultibyteElement.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
     ],
 
     'ISO 2022 IR 149' => [
-      Element.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
+      MultibyteElement.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
     ],
 
     'ISO 2022 IR 58' => [
-      Element.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
+      MultibyteElement.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
     ]
   }
 end
@@ -212,8 +215,9 @@ end
 if __FILE__ == $0
 
   def do_it(dcm_00080005, str)
-    puts str.unpack('C*').map {|x| "%02x" % x }.join(" ")
-    pp DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| [x.instance_variable_get(:@dicom_encoding_element), x.encode('utf-8')]}
+    # puts str.unpack('C*').map {|x| "%02x" % x }.join(" ")
+    # pp DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| [x.instance_variable_get(:@dicom_encoding_element), x.encode('utf-8')]}
+    puts DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| [x.encode('utf-8')]}.join
   end
 
   c = DCM_CharSet::Context.new("\\ISO 2022 IR 87\\ISO 2022 IR 13")
@@ -225,7 +229,7 @@ if __FILE__ == $0
   do_it("GB18030", "\x57\x61\x6e\x67\x5e\x58\x69\x61\x6f\x44\x6f\x6e\x67\x3d\xcd\xf5\x5e\xd0\xa1\xb6\xab\x3d")
   do_it("\\ISO 2022 IR 58", "\x5A\x68\x61\x6E\x67\x5E\x58\x69\x61\x6F\x44\x6F\x6E\x67\x3D\x1B\x24\x29\x41\xD5\xC5\x5E\x1B\x24\x29\x41\xD0\xA1\xB6\xAB\x3D\x20")
 
-  do_it("\\ISO 2022 IR 87\\ISO 2022 IR 13", "\e$B<*I!0v9\"2J\e(B")
+  do_it("\\ISO 2022 IR 87\\ISO 2022 IR 13", "a b\tc\e$B<*I!0v9\"2J\e(B")
 
 
   do_it("ISO 2022 IR 13\\ISO 2022 IR 87\\ISO 2022 IR 6\\ISO 2022 IR 58\\ISO 2022 IR 149",
