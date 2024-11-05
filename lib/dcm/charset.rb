@@ -1,7 +1,7 @@
 # coding: us-ascii
 module DCM_CharSet
-  class InvalidCharSet < RuntimeError
-  end
+  class InvalidCharSet < RuntimeError; end
+  class NotAllowDefaultCharSet < InvalidCharSet; end
 
   class Context
     def initialize(dcm_00080005)
@@ -12,7 +12,6 @@ module DCM_CharSet
         @encoding = CharactorSetWOExtensions[ary.first]
       else
         @default_encoding = CharactorSet[ary.first]
-        @default_encoding.each {|e| raise InvalidCharSet unless e.allow_default?}
         @wo_extensions = false
         @allow_encoding = {}
         ary.each do |x|
@@ -34,6 +33,7 @@ module DCM_CharSet
         return ary
       end
       ary[0] = 'ISO 2022 IR 6' if ary[0].empty?
+      raise(NotAllowDefaultCharSet.new(ary[0])) if MultibyteCharactorSet.include?(ary[0])
       ary.each do |x|
         raise(InvalidCharSet.new(x)) unless CharactorSet.include?(x)
       end
@@ -91,16 +91,6 @@ module DCM_CharSet
 
     def inspect
       "#<#{self.class.to_s}:#{@escape_sequence.inspect} #{@encoding}>"
-    end
-
-    def allow_default?
-      true
-    end
-  end
-
-  class MultibyteElement < Element
-    def allow_default?
-      false
     end
   end
 
@@ -195,21 +185,23 @@ module DCM_CharSet
     ],
 
     'ISO 2022 IR 87' => [
-      MultibyteElement.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
+      Element.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
     ],
 
     'ISO 2022 IR 159' => [
-      MultibyteElement.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
+      Element.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
     ],
 
     'ISO 2022 IR 149' => [
-      MultibyteElement.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
+      Element.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
     ],
 
     'ISO 2022 IR 58' => [
-      MultibyteElement.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
+      Element.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
     ]
   }
+
+  MultibyteCharactorSet = ['ISO 2022 IR 87', 'ISO 2022 IR 159', 'ISO 2022 IR 149', 'ISO 2022 IR 58']
 end
 
 if __FILE__ == $0
@@ -229,7 +221,7 @@ if __FILE__ == $0
   do_it("GB18030", "\x57\x61\x6e\x67\x5e\x58\x69\x61\x6f\x44\x6f\x6e\x67\x3d\xcd\xf5\x5e\xd0\xa1\xb6\xab\x3d")
   do_it("\\ISO 2022 IR 58", "\x5A\x68\x61\x6E\x67\x5E\x58\x69\x61\x6F\x44\x6F\x6E\x67\x3D\x1B\x24\x29\x41\xD5\xC5\x5E\x1B\x24\x29\x41\xD0\xA1\xB6\xAB\x3D\x20")
 
-  do_it("\\ISO 2022 IR 87\\ISO 2022 IR 13", "a b\tc\e$B<*I!0v9\"2J\e(B")
+  do_it("ISO 2022 IR 87\\ISO 2022 IR 13", "a b\tc\e$B<*I!0v9\"2J\e(B")
 
 
   do_it("ISO 2022 IR 13\\ISO 2022 IR 87\\ISO 2022 IR 6\\ISO 2022 IR 58\\ISO 2022 IR 149",
