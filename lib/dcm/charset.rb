@@ -24,6 +24,7 @@ module DCM_CharSet
         @reg = Regexp.new(seg.join('|'), 0)
       end
     end
+    attr_reader :allow_encoding
 
     def parse_charset(charset)
       ary = charset ? charset.strip.split('\\').map {|x| x.strip.upcase} : []
@@ -63,6 +64,29 @@ module DCM_CharSet
       result
     end
 
+    def convert_to_dicom(str)
+      return convert_wo_extensions(str) if @wo_extensions
+
+      clcr = CLCRElement.new
+      graphic = @default_encoding.map {|e| [e.code_element, e]}.to_h
+      
+      str.each_char.map do |c|
+        if clcr.allow_char_utf8.include?(c)
+          [nil, clcr._encode_to_dicom(c)]
+        elsif graphic["GL"].allow_char_utf8.include?(c)
+          [nil, graphic["GL"]._encode_to_dicom(c)]
+        elsif graphic["GR"]&.allow_char_utf8&.include?(c)
+          [nil, graphic["GR"]._encode_to_dicom(c)]
+        else
+          e = @allow_encoding.values.find { |e|
+            e.allow_char_utf8.include?(c)
+          }
+          graphic[e.code_element] = e
+          [e.escape_sequence, e._encode_to_dicom(c)]
+        end
+      end
+    end
+
     def convert_wo_extensions(str)
       [str.force_encoding(@encoding)]
     end
@@ -92,11 +116,60 @@ module DCM_CharSet
     def inspect
       "#<#{self.class.to_s}:#{@escape_sequence.inspect} #{@encoding}>"
     end
+
+    def allow_char_utf8
+      @allow_char_utf8 ||= _range.map { |b|
+        begin
+          b.force_encoding(@encoding).encode('utf-8')
+        rescue
+          nil
+        end
+      }.compact.join
+    end
+
+    def _range(c_e=nil)
+      c_e ||= @code_element
+      if c_e == 'GL'
+        ("\x20".."\x7e").to_a
+      else
+        ("\xa0".."\xff").to_a
+      end
+    end
+
+    def _encode_to_dicom(c)
+      c.encode(@encoding).force_encoding('binary')
+    end
+  end
+
+  class MultibyteElement < Element
+    def _range(c_e=nil)
+      ary = super(c_e)
+      ary.product(ary).map(&:join)
+    end
+  end
+
+  class CLCRElement
+    def allow_char_utf8
+      @allow_char_utf8 ||= ("\u0000".."\u001f").to_a.join + "\u007f" + ("\u0080".."\u009f").to_a.join
+    end
+
+    def _encode_to_dicom(c)
+      c.encode('iso-8859-1').force_encoding('binary')
+    end
   end
 
   module E_shift_to_GR
+    def _range(c_e=nil)
+      super('GR')
+    end
+
     def _encode(str)
       str.each_byte.map {|x| x > 0x20 ? x | 0x80 : x}.pack('c*').force_encoding(@encoding)
+    end
+
+    def _encode_to_dicom(c)
+      str = super(c)
+      str.each_byte.map {|x| x > 0xa0 ? x - 0x80 : x}.pack('c*')
     end
   end
 
@@ -126,7 +199,7 @@ module DCM_CharSet
 
     'ISO 2022 IR 100' => [
       AsciiElement, 
-      Element.new('GR', [0x1B, 0x2D, 0x41], 'ISO_8859_1')
+      Element.new('GR', [0x1B, 0x2D, 0x41], 'iso-8859-1')
     ],
 
     'ISO 2022 IR 101' => [
@@ -175,8 +248,8 @@ module DCM_CharSet
     ],
     
     'ISO 2022 IR 13' => [
-      Element.new('GL', [0x1B, 0x28, 0x4A], 'cp50221'),
-      Element.new('GR', [0x1B, 0x29, 0x49], 'cp50221')
+      Element.new('GL', [0x1B, 0x28, 0x4A], 'Shift_JIS'),
+      Element.new('GR', [0x1B, 0x29, 0x49], 'Shift_JIS')
     ],
 
     'ISO 2022 IR 166' => [
@@ -185,19 +258,20 @@ module DCM_CharSet
     ],
 
     'ISO 2022 IR 87' => [
-      Element.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
+      MultibyteElement.new('GL', [0x1B, 0x24, 0x42], 'euc-jp').extend(E_shift_to_GR)
     ],
 
+=begin
     'ISO 2022 IR 159' => [
       Element.new('GL', [0x1B, 0x24, 0x28, 0x44], 'euc-jp').extend(E_shift_to_GR)
     ],
-
+=end
     'ISO 2022 IR 149' => [
-      Element.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
+      MultibyteElement.new('GR', [0x1B, 0x24, 0x29, 0x43], 'euc-kr')
     ],
 
     'ISO 2022 IR 58' => [
-      Element.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
+      MultibyteElement.new('GR', [0x1B, 0x24, 0x29, 0x41], 'gb18030')
     ]
   }
 
@@ -209,22 +283,28 @@ if __FILE__ == $0
   def do_it(dcm_00080005, str)
     # puts str.unpack('C*').map {|x| "%02x" % x }.join(" ")
     # pp DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| [x.instance_variable_get(:@dicom_encoding_element), x.encode('utf-8')]}
-    puts DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| [x.encode('utf-8')]}.join
+    s = DCM_CharSet::Context.new(dcm_00080005).convert(str).map {|x| [x.encode('utf-8')]}.join
+    puts s
+    s
   end
 
-  c = DCM_CharSet::Context.new("\\ISO 2022 IR 87\\ISO 2022 IR 13")
+  c = DCM_CharSet::Context.new("\\ISO 2022 IR 87\\ISO 2022 IR 13\\ISO 2022 IR 58\\ISO 2022 IR 149")
 
-  do_it("\\ISO 2022 IR 87", "Yamada^Tarou=\033$B;3ED\033(B^\033$BB@O:\033(B=\033$B$d$^$@\033(B^\033$B$?$m$&\033(B")
+  str = do_it("\\ISO 2022 IR 87", "Yamada^Tarou=\033$B;3ED\033(B^\033$BB@O:\033(B=\033$B$d$^$@\033(B^\033$B$?$m$&\033(B")
   do_it("ISO 2022 IR 13\\ISO 2022 IR 87", "\324\317\300\336^\300\333\263=\033$B;3ED\033(J^\033$BB@O:\033(J=\033$B$d$^$@\033(J^\033$B$?$m$&\033(J")
   do_it("\\ISO 2022 IR 149", "Hong^Gildong=\033$)C\373\363^\033$)C\321\316\324\327=\033$)C\310\253^\033$)C\261\346\265\277")
   do_it("ISO_IR 192", "\x57\x61\x6e\x67\x5e\x58\x69\x61\x6f\x44\x6f\x6e\x67\x3d\xe7\x8e\x8b\x5e\xe5\xb0\x8f\xe6\x9d\xb1\x3d")
   do_it("GB18030", "\x57\x61\x6e\x67\x5e\x58\x69\x61\x6f\x44\x6f\x6e\x67\x3d\xcd\xf5\x5e\xd0\xa1\xb6\xab\x3d")
   do_it("\\ISO 2022 IR 58", "\x5A\x68\x61\x6E\x67\x5E\x58\x69\x61\x6F\x44\x6F\x6E\x67\x3D\x1B\x24\x29\x41\xD5\xC5\x5E\x1B\x24\x29\x41\xD0\xA1\xB6\xAB\x3D\x20")
 
-  do_it("ISO 2022 IR 87\\ISO 2022 IR 13", "a b\tc\e$B<*I!0v9\"2J\e(B")
+  do_it("\\ISO 2022 IR 87\\ISO 2022 IR 13", "a b\tc\e$B<*I!0v9\"2J\e(B")
 
 
   do_it("ISO 2022 IR 13\\ISO 2022 IR 87\\ISO 2022 IR 6\\ISO 2022 IR 58\\ISO 2022 IR 149",
   "\324\317\300\336^\300\333\263=\033$B;3ED\033(J^\033$BB@O:\033(J=\033$B$d$^$@\033(J^\033$B$?$m$&\033(J\n" + "\x5A\x68\x61\x6E\x67\x5E\x58\x69\x61\x6F\x44\x6F\x6E\x67\x3D\x1B\x24\x29\x41\xD5\xC5\x5E\x1B\x24\x29\x41\xD0\xA1\xB6\xAB\x3D\x20" + "Hong^Gildong=\033$)C\373\363^\033$)C\321\316\324\327=\033$)C\310\253^\033$)C\261\346\265\277"
   )
+
+  pp DCM_CharSet::Context.new("ISO 2022 IR 13\\ISO 2022 IR 87").convert("\324\317\300\336^\300\333\263=\033$B;3ED\033(J^\033$BB@O:\033(J=\033$B$d$^$@\033(J^\033$B$?$m$&\033(J")
+
+  pp c.convert_to_dicom(str).flatten.join
 end
